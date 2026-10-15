@@ -193,7 +193,7 @@
       <div id="drawWinnerTime" class="muted" style="font-size:12px;margin-top:4px"></div>
     </div>
 
-    <button class="ok" style="width:100%;padding:12px;margin-bottom:8px" onclick="runTestDraw()">🔴 Fazer sorteio teste AO VIVO</button>
+    <button class="ok" style="width:100%;padding:12px;margin-bottom:8px" onclick="runTestDraw()">🟢 Fazer teste sincronizado AO VIVO</button>
     <button id="officialDrawBtn" style="width:100%;padding:12px;background:#ffb000;color:#111;border:0;border-radius:10px;font-weight:800" onclick="runOfficialDraw()">🏆 Realizar sorteio oficial</button>
     <button style="width:100%;padding:10px;margin-top:8px" onclick="showEligibleNames()">Ver participantes válidos</button>
 
@@ -371,7 +371,7 @@ async function loadOnlineRaffleEntries(){
   try{
     const {data,error}=await sb
       .from('rifa_nomes')
-      .select('nome,status,comprador')
+      .select('nome,status,comprador,integrantes(nome)')
       .order('id',{ascending:true});
     if(error)throw error;
     // Mantém a lista exibida sincronizada com todos os nomes cadastrados no Supabase.
@@ -380,7 +380,7 @@ async function loadOnlineRaffleEntries(){
       if(r.nome && !names.includes(r.nome)) names.push(r.nome);
     });
     onlineRaffleEntries=(data||[]).map(r=>({
-      name:r.nome,buyer:r.comprador||'Participante de teste',status:r.status
+      name:r.nome,buyer:r.comprador||'',seller:displaySeller(r.integrantes?.nome),status:r.status
     }));
     onlineRaffleMap=new Map((data||[]).map(r=>[r.nome,r]));
     renderNames();
@@ -407,7 +407,7 @@ function subscribeRaffleRealtime(){
           if(payload.new?.nome && !names.includes(payload.new.nome)) names.push(payload.new.nome);
         }
         onlineRaffleEntries=[...onlineRaffleMap.values()].map(r=>({
-          name:r.nome,buyer:r.comprador||'Participante de teste',status:r.status
+          name:r.nome,buyer:r.comprador||'',seller:displaySeller(r.integrantes?.nome),status:r.status
         }));
         if(row.status!=='disponivel')selected=selected.filter(n=>n!==row.nome);
         renderNames();
@@ -417,106 +417,77 @@ function subscribeRaffleRealtime(){
     .subscribe();
 }
 
-function startLiveViewer(){
+function displaySeller(v){return /^(gionava|giovana)$/i.test((v||'').trim())?'Geovanna':(v||'Não informado');}
+function startLiveViewer(row){
   if(liveViewerRunning)return;
-  liveViewerRunning=true;
-  drawInProgress=true;
-
-  const modal=document.getElementById('drawModal');
-  const nameEl=document.getElementById('drawRollingName');
-  const buyerEl=document.getElementById('drawRollingBuyer');
-  const titleEl=document.getElementById('drawModalTitle');
-  const badgeEl=document.getElementById('drawModalBadge');
-  const statusEl=document.getElementById('drawAnimationStatus');
-  const actions=document.getElementById('drawFinalActions');
-
-  modal.classList.remove('hidden');
-  actions.classList.add('hidden');
-  badgeEl.textContent='🔴 SORTEIO TESTE AO VIVO';
-  titleEl.textContent='Sorteando...';
-  statusEl.textContent='O sorteio está acontecendo ao vivo.';
-  buyerEl.textContent='';
-
-  const pool=onlineRaffleEntries.length
-    ? onlineRaffleEntries
-    : names.map(n=>({name:n,buyer:'Participante de teste'}));
-
+  liveViewerRunning=true;drawInProgress=true;
+  document.getElementById('drawModal').classList.remove('hidden');
+  document.getElementById('drawFinalActions').classList.add('hidden');
+  document.getElementById('drawModalBadge').textContent=row.modo==='oficial'?'🏆 SORTEIO OFICIAL AO VIVO':'🟢 TESTE AO VIVO';
+  document.getElementById('drawModalTitle').textContent='Sorteando...';
+  document.getElementById('drawAnimationStatus').textContent='Acompanhe o sorteio em tempo real.';
+  const pool=onlineRaffleEntries.filter(x=>x.status==='pago');
   if(liveViewerTimer)clearInterval(liveViewerTimer);
   liveViewerTimer=setInterval(()=>{
+    if(!pool.length)return;
     const e=pool[secureRandomIndex(pool.length)];
-    nameEl.textContent=e.name;
-    buyerEl.textContent=e.buyer?'Comprador: '+e.buyer:'';
-  },85);
+    document.getElementById('drawRollingName').textContent=e.name;
+    document.getElementById('drawRollingBuyer').textContent='Comprador: '+(e.buyer||'Não informado');
+  },90);
 }
-
 function finishLiveViewer(row){
-  if(liveViewerTimer){
-    clearInterval(liveViewerTimer);
-    liveViewerTimer=null;
-  }
-
-  liveViewerRunning=false;
-  drawInProgress=false;
-
-  const modal=document.getElementById('drawModal');
-  modal.classList.remove('hidden');
-  document.getElementById('drawModalBadge').textContent='🔴 SORTEIO TESTE AO VIVO';
+  if(liveViewerTimer){clearInterval(liveViewerTimer);liveViewerTimer=null;}
+  liveViewerRunning=false;drawInProgress=false;
+  document.getElementById('drawModal').classList.remove('hidden');
+  document.getElementById('drawModalBadge').textContent=row.modo==='oficial'?'🏆 RESULTADO OFICIAL':'🟢 RESULTADO DO TESTE';
   document.getElementById('drawModalTitle').textContent='🎉 Nome sorteado!';
   document.getElementById('drawRollingName').textContent=row.vencedor||'---';
-  document.getElementById('drawRollingBuyer').textContent=
-    row.comprador_vencedor?'Comprador: '+row.comprador_vencedor:'';
-  document.getElementById('drawAnimationStatus').textContent=
-    'Todos os aparelhos conectados recebem o mesmo resultado. Este é um teste.';
+  document.getElementById('drawRollingBuyer').textContent='Comprador: '+(row.comprador_vencedor||'Não informado')+' | Vendido por: '+displaySeller(row.vendedor_vencedor);
+  document.getElementById('drawAnimationStatus').textContent=row.modo==='oficial'?'Resultado oficial registrado no Supabase.':'Este teste não altera o sorteio oficial.';
   document.getElementById('drawFinalActions').classList.remove('hidden');
+  if(row.modo==='oficial'){
+    const btn=document.getElementById('officialDrawBtn');if(btn){btn.disabled=true;btn.textContent='🏆 Sorteio oficial realizado';}
+  }
 }
-
+let liveDismissedResultKey=null;
+let liveShownResultKey=null;
+function liveResultKey(row){
+  return [row.modo,row.status,row.vencedor,row.comprador_vencedor,row.vendedor_vencedor].join('|');
+}
 function handleLiveDrawState(row){
-  if(!row||row.modo!=='teste')return;
+  if(!row)return;
+  const previous=liveLastState;
   liveLastState=row;
-
-  if(row.status==='preparando'||row.status==='sorteando'){
-    startLiveViewer();
+  if(row.status==='sorteando'){
+    // Um novo teste pode ser iniciado depois de fechar o resultado anterior.
+    liveDismissedResultKey=null;
+    liveShownResultKey=null;
+    startLiveViewer(row);
   }else if(row.status==='finalizado'&&row.vencedor){
+    const key=liveResultKey(row);
+    if(liveDismissedResultKey===key)return;
+    if(liveShownResultKey===key)return;
+    liveShownResultKey=key;
     finishLiveViewer(row);
   }
 }
-
+async function refreshLiveDrawState(){
+  const {data,error}=await sb.from('sorteio_ao_vivo').select('*').eq('id',1).maybeSingle();
+  if(!error&&data)handleLiveDrawState(data);
+}
 async function initLiveDraw(){
-  await loadOnlineRaffleEntries();
-  subscribeRaffleRealtime();
-  try{await loadOnlineImpact();renderImpact();subscribeImpactRealtime();}catch(e){console.error('Impacto online:',e)}
-
-  try{
-    const {data,error}=await sb
-      .from('sorteio_ao_vivo')
-      .select('*')
-      .eq('id',1)
-      .single();
-    if(!error&&data)liveLastState=data;
-  }catch(e){
-    console.error(e);
-  }
-
-  sb.channel('gestores-que-acolhem-sorteio')
-    .on(
-      'postgres_changes',
-      {
-        event:'UPDATE',
-        schema:'public',
-        table:'sorteio_ao_vivo',
-        filter:'id=eq.1'
-      },
-      payload=>handleLiveDrawState(payload.new)
-    )
+  await loadOnlineRaffleEntries();subscribeRaffleRealtime();
+  try{await loadOnlineImpact();renderImpact();subscribeImpactRealtime();}catch(e){console.error(e)}
+  await refreshLiveDrawState();
+  sb.channel('gestores-que-acolhem-sorteio-v56')
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'sorteio_ao_vivo',filter:'id=eq.1'},p=>handleLiveDrawState(p.new))
     .subscribe(status=>{
       const el=document.getElementById('liveConnectionStatus');
-      if(el){
-        if(status==='SUBSCRIBED')el.textContent='🟢 Supabase conectado — sorteio ao vivo disponível';
-        else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT')el.textContent='🔴 Falha na conexão em tempo real';
-      }
+      if(el)el.textContent=status==='SUBSCRIBED'?'🟢 Conectado — sorteio ao vivo disponível':'🟠 Verificando conexão ao vivo...';
     });
+  // Fallback para celulares sem Realtime habilitado na tabela.
+  setInterval(()=>{if(!document.hidden)refreshLiveDrawState();},1800);
 }
-
 
 function renderRaffleGoal(){
   const totalNames=Math.max(1,names.length);
@@ -1024,7 +995,7 @@ function getEligibleEntries(s){
   return rows.filter(r=>r.status==='pago').map(r=>({
     name:r.nome,
     buyer:r.comprador||'',
-    seller:r.integrantes?.nome||''
+    seller:displaySeller(r.integrantes?.nome)
   }));
 }
 function secureRandomIndex(max){
@@ -1050,6 +1021,8 @@ function openDrawModal(mode){
 }
 function closeDrawModal(){
   if(drawInProgress)return;
+  // Impede que as consultas periódicas reabram o mesmo resultado já fechado.
+  if(liveLastState?.status==='finalizado') liveDismissedResultKey=liveResultKey(liveLastState);
   if(drawTimer){clearInterval(drawTimer);drawTimer=null;}
   document.getElementById('drawModal').classList.add('hidden');
 }
@@ -1069,7 +1042,7 @@ function animateDraw(entries,finalEntry,mode,onDone){
   function showRandom(){
     const e=entries[secureRandomIndex(entries.length)];
     nameEl.textContent=e.name;
-    buyerEl.textContent=e.buyer?'Comprador: '+e.buyer:'';
+    buyerEl.textContent=(e.buyer?'Comprador: '+e.buyer:'')+(e.seller?' | Vendido por: '+e.seller:'');
   }
 
   function step(){
@@ -1083,7 +1056,7 @@ function animateDraw(entries,finalEntry,mode,onDone){
 
     drawTimer=null;
     nameEl.textContent=finalEntry.name;
-    buyerEl.textContent=finalEntry.buyer?'Comprador: '+finalEntry.buyer:'Comprador não informado';
+    buyerEl.textContent=(finalEntry.buyer?'Comprador: '+finalEntry.buyer:'Comprador não informado')+' | Vendido por: '+(finalEntry.seller||'Não informado');
     titleEl.textContent='🎉 Nome sorteado!';
     statusEl.textContent=mode==='official'
       ? 'Resultado oficial registrado.'
@@ -1102,9 +1075,9 @@ function renderDrawAdmin(s){
 
   const officialBtn=document.getElementById('officialDrawBtn');
   if(officialBtn){
-    officialBtn.disabled=entries.length===0||!!s.drawResult;
+    officialBtn.disabled=entries.length===0||!!s.drawResult||(liveLastState?.modo==='oficial'&&liveLastState?.status==='finalizado');
     officialBtn.style.opacity=officialBtn.disabled?'.55':'1';
-    officialBtn.textContent=s.drawResult?'🏆 Sorteio oficial realizado':'🏆 Realizar sorteio oficial';
+    officialBtn.textContent=officialBtn.disabled&&liveLastState?.modo==='oficial'?'🏆 Sorteio oficial realizado':'🏆 Realizar sorteio oficial';
   }
 
   const box=document.getElementById('drawResultBox');
@@ -1114,7 +1087,7 @@ function renderDrawAdmin(s){
     box.style.display='block';
     document.getElementById('drawResultLabel').textContent='RESULTADO OFICIAL';
     document.getElementById('drawWinnerName').textContent=s.drawResult.name;
-    document.getElementById('drawWinnerBuyer').textContent='Comprador: '+(s.drawResult.buyer||'Não informado');
+    document.getElementById('drawWinnerBuyer').textContent='Comprador: '+(s.drawResult.buyer||'Não informado')+' | Vendido por: '+(s.drawResult.seller||'Não informado');
     document.getElementById('drawWinnerTime').textContent=s.drawResult.when||'';
   }else{
     box.style.display='none';
@@ -1126,112 +1099,41 @@ function showEligibleNames(){
   box.classList.toggle('hidden');
   if(box.classList.contains('hidden'))return;
   box.innerHTML=entries.length
-    ? entries.map((e,i)=>`<div style="padding:5px 0;border-bottom:1px solid #eef1f4">${i+1}. <b>${esc(e.name)}</b> <span class="muted">— ${esc(e.buyer||'comprador não informado')}</span></div>`).join('')
+    ? entries.map((e,i)=>`<div style="padding:5px 0;border-bottom:1px solid #eef1f4">${i+1}. <b>${esc(e.name)}</b> <span class="muted">— ${esc(e.buyer||'comprador não informado')} | Vendido por: ${esc(displaySeller(e.seller))}</span></div>`).join('')
     : '<div class="muted">Nenhum nome pago confirmado ainda.</div>';
 }
 async function runTestDraw(){
-  if(drawInProgress||liveViewerRunning)return;
-
-  try{
-    const {data:rows,error}=await sb
-      .from('rifa_nomes')
-      .select('nome,status,comprador')
-      .order('id',{ascending:true});
-
-    if(error)throw error;
-    if(!rows||!rows.length)throw new Error('Nenhum nome encontrado no Supabase.');
-
-    const entries=rows.map(r=>({
-      name:r.nome,
-      buyer:r.comprador||'Participante de teste'
-    }));
-
-    const finalEntry=entries[secureRandomIndex(entries.length)];
-    const total=entries.length;
-
-    const prep=await sb.from('sorteio_ao_vivo').update({
-      modo:'teste',
-      status:'preparando',
-      nome_atual:null,
-      vencedor:null,
-      comprador_vencedor:null,
-      total_participantes:total,
-      iniciado_em:new Date().toISOString(),
-      finalizado_em:null,
-      atualizado_em:new Date().toISOString()
-    }).eq('id',1);
-
-    if(prep.error)throw prep.error;
-
-    await new Promise(r=>setTimeout(r,1000));
-
-    const rolling=await sb.from('sorteio_ao_vivo').update({
-      modo:'teste',
-      status:'sorteando',
-      atualizado_em:new Date().toISOString()
-    }).eq('id',1);
-
-    if(rolling.error)throw rolling.error;
-
-    await new Promise(r=>setTimeout(r,6500));
-
-    const finished=await sb.from('sorteio_ao_vivo').update({
-      modo:'teste',
-      status:'finalizado',
-      vencedor:finalEntry.name,
-      comprador_vencedor:finalEntry.buyer||'Participante de teste',
-      total_participantes:total,
-      finalizado_em:new Date().toISOString(),
-      atualizado_em:new Date().toISOString()
-    }).eq('id',1);
-
-    if(finished.error)throw finished.error;
-  }catch(err){
-    console.error('Erro detalhado do Supabase:', err);
-    const msg = [
-      'Não foi possível iniciar o sorteio ao vivo.',
-      '',
-      'Erro do Supabase:',
-      (err && err.message) ? err.message : String(err),
-      (err && err.details) ? '\nDetalhes: '+err.details : '',
-      (err && err.hint) ? '\nDica: '+err.hint : '',
-      (err && err.code) ? '\nCódigo: '+err.code : ''
-    ].join('\n');
-    alert(msg);
-  }
-}
-function runOfficialDraw(){
   if(drawInProgress)return;
-  const s=load();
-
-  if(s.drawResult){
-    alert('O sorteio oficial já foi realizado neste navegador.');
-    return;
-  }
-
-  const entries=getEligibleEntries(s);
-  if(!entries.length){
-    alert('Não há nomes com pagamento confirmado para o sorteio oficial.');
-    return;
-  }
-
-  if(!confirm(`Serão considerados ${entries.length} nome(s) com pagamento confirmado. Deseja realizar o SORTEIO OFICIAL agora?`))return;
-
-  const finalEntry=entries[secureRandomIndex(entries.length)];
-
-  animateDraw(entries,finalEntry,'official',()=>{
-    const latest=load();
-    if(latest.drawResult)return;
-    latest.drawResult={
-      name:finalEntry.name,
-      buyer:finalEntry.buyer||'',
-      seller:finalEntry.seller||'',
-      eligibleCount:entries.length,
-      when:new Date().toLocaleString('pt-BR')
-    };
-    save(latest);
-    renderAdmin();
-  });
+  const senha=prompt('Senha exclusiva do sorteio ao vivo (configurada no SQL V56):');
+  if(!senha)return;
+  try{
+    const {data,error}=await sb.rpc('gqa_iniciar_sorteio_v56',{p_senha:senha,p_modo:'teste'});
+    if(error)throw error;
+    await refreshLiveDrawState();
+    setTimeout(async()=>{
+      const {error:e}=await sb.rpc('gqa_finalizar_sorteio_v56',{p_senha:senha,p_modo:'teste'});
+      if(e)alert('Falha ao finalizar teste: '+e.message);
+      await refreshLiveDrawState();
+    },6500);
+  }catch(e){alert('Não foi possível iniciar o teste ao vivo: '+e.message);}
+}
+async function runOfficialDraw(){
+  if(drawInProgress)return;
+  await refreshLiveDrawState();
+  if(liveLastState?.modo==='oficial'&&liveLastState?.status==='finalizado')return alert('O sorteio oficial já foi realizado.');
+  const senha=prompt('Senha exclusiva do sorteio oficial (configurada no SQL V56):');
+  if(!senha)return;
+  if(!confirm('ATENÇÃO: iniciar o SORTEIO OFICIAL para todos os celulares? Esta ação é irreversível.'))return;
+  try{
+    const {error}=await sb.rpc('gqa_iniciar_sorteio_v56',{p_senha:senha,p_modo:'oficial'});
+    if(error)throw error;
+    await refreshLiveDrawState();
+    setTimeout(async()=>{
+      const {error:e}=await sb.rpc('gqa_finalizar_sorteio_v56',{p_senha:senha,p_modo:'oficial'});
+      if(e)alert('O resultado foi registrado, mas não foi possível finalizar a exibição: '+e.message);
+      await refreshLiveDrawState();
+    },6500);
+  }catch(e){alert('Não foi possível iniciar o sorteio oficial: '+e.message);}
 }
 
 function approve(i){const s=load(),o=s.orders[i];if(o.status!=='aguardando')return;o.status='pago';o.names.forEach(n=>{s.waiting=s.waiting.filter(x=>x!==n);if(!s.sold.includes(n))s.sold.push(n)});save(s);renderAdmin()}
